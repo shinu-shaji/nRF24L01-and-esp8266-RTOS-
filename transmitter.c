@@ -5,7 +5,6 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "ringbuf.h"
-
 #include "esp8266/spi_struct.h"
 #include "esp8266/gpio_struct.h"
 #include "esp_system.h"
