@@ -132,7 +132,7 @@ void setup_nrf(int mode){//mode =1 for prx and 0 for ptx  now only can transmit 
 	data_len =8;
 
 	nrf_write(&cmd , cmd_len, &addr, addr_len, &data, data_len);
-	}
+	 }
 	else if (mode ==0){
 	// set powerup adn tx mode
 	cmd = cmd_write;
