@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "ringbuf.h"
+
 #include "esp8266/spi_struct.h"
 #include "esp8266/gpio_struct.h"
 #include "esp_system.h"
@@ -17,6 +18,19 @@
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_IO_0) | (1ULL<<GPIO_OUTPUT_IO_1))
 #define buff_size (1024*2)
 
+struct status_n{
+		uint8_t RX_DR;
+		uint8_t TX_DS; 
+		uint8_t MAX_RT;
+		uint8_t RX_P_NO; 
+		uint8_t TX_FULL;
+		uint8_t RX_DR_MASK;
+		uint8_t TX_DS_MASK;
+		uint8_t MAX_RT_MASK;
+		uint8_t RX_P_NO_MASK;
+		uint8_t TX_FULL_MASK;
+	}STATUS_NRF;
+struct status_n STATUS_NRF= {0,0,0,0,0,0x40,0x20,0x10,0x0e,0x01};
 //commands
 	uint16_t cmd_read = 0X00;//3bit
 	uint16_t cmd_write = 0x01<<(16-11);//3 bit
@@ -33,7 +47,7 @@
 	uint32_t PRIM_TX = 0x00;//address 00 8bit
 	uint32_t auto_retransmit = 0x00;//address 04 8bit 
 	uint32_t PWR_UP =0x02;//address 00
-	uint32_t RX_PW_P0 =0x04;//address 11 payload width in bytes
+	uint32_t RX_PW_P0 =0x4;//address 11 payload width in bytes
 	
 	uint32_t addr04 =0x04<<(32-5);
 	uint32_t addr00 =0x00;
@@ -42,7 +56,7 @@
 	uint32_t addr06 = 0x06<<(32-5);//rf config
 	uint32_t addr08 = 0x08<<(32-5);
 	uint32_t addr_status = 0x07<<(32-5);
-
+	uint32_t addr_FIFO = 0x17<<(32-5);
 
 
 
@@ -157,76 +171,128 @@ void setup_nrf(int mode){//mode =1 for prx and 0 for ptx  now only can transmit 
 	}
 
 }
+ void flush_buffer(uint8_t buf){//if buff ==1 flush receiver buffer else if "0" flush transmitter buffer
+	uint16_t cmd;
+	uint8_t  cmd_len;
+	uint32_t addr =0x00;
+	uint8_t  addr_len=0;
+	uint32_t data =0; 
+	uint8_t data_len =0;
+
+	if(buf ==1){
+	cmd = 0xE2;
+	cmd_len= 8;
+
+	}
+	else if(buf ==0){
+	cmd = 0xE1;
+	cmd_len= 8;
+		
+	}
+	nrf_write(&cmd , cmd_len, &addr, addr_len, &data, data_len);
+	//return 1;
+	}
+
+
+
+void read_status(){
+	uint16_t cmd =cmd_read;
+	uint8_t cmd_len =3;
+	uint32_t addr = 0x07<<(32-5);
+	uint8_t addr_len = 5;
+	uint32_t data = 0x00; 
+	uint8_t data_len =8;
+	nrf_read(&cmd , cmd_len, &addr, addr_len, &data, data_len);
+	STATUS_NRF.RX_DR   =  (data&STATUS_NRF.RX_DR_MASK)  !=0; //rx received 6 th bit
+	STATUS_NRF.TX_DS   =  (data&STATUS_NRF.TX_DS_MASK)  !=0 ; //tx send 5  th bit
+	STATUS_NRF.MAX_RT  =  (data&STATUS_NRF.MAX_RT_MASK) !=0 ; //max retry 4  th bit
+	STATUS_NRF.RX_P_NO =  (data&STATUS_NRF.RX_P_NO_MASK)>>1; // payload address 3  th bit to 1 th bit
+	STATUS_NRF.TX_FULL =  (data&STATUS_NRF.TX_FULL_MASK)!=0; //transmitter buffer full 0  th bit;
+
+
+}
+ void write_status(){
+	uint16_t cmd =cmd_write;
+	uint8_t cmd_len =3;
+	uint32_t addr = 0x07<<(32-5);
+	uint8_t addr_len = 5;
+	uint8_t data_len =8;
+	uint32_t data = (STATUS_NRF.RX_DR<<6) | (STATUS_NRF.TX_DS<<5)|(STATUS_NRF.MAX_RT<<4)|(STATUS_NRF.RX_P_NO<<1)|(STATUS_NRF.TX_FULL); //rx received 6 th bit
+	//tx send 5  th bit
+	 //max retry 4  th bit
+	// payload address 3  th bit to 1 th bit
+	//transmitter buffer full 0  th bit;
+	nrf_write(&cmd , cmd_len, &addr, addr_len, &data, data_len);
+	};
+
+
+bool receive_data(uint32_t *data){
+	gpio_set_level(GPIO_OUTPUT_IO_1,true);	
+	read_status();		
+	*data=0x00;
+	if(STATUS_NRF.RX_DR>0){	
+		gpio_set_level(GPIO_OUTPUT_IO_1,false);
+		
+		nrf_read(&cmd_R_RX_PAYLOAD , 8, 0x00, 0, data,RX_PW_P0*8);
+		
+		
+		STATUS_NRF.RX_DR = 0x01;
+		
+		
+		write_status();	
+		flush_buffer(1);
+		return 1;
+		}
+	return 0;
+	}
+bool send_data(uint32_t *data){
+	uint16_t cmd = cmd_W_TX_PAYLOAD;
+	uint8_t cmd_len =8;
+	uint32_t addr = 0x00;
+	uint8_t addr_len = 0;
+	nrf_write(&cmd , cmd_len, &addr, addr_len, data, RX_PW_P0*8);
+	vTaskDelay(1/ portTICK_RATE_MS);
+	gpio_set_level(GPIO_OUTPUT_IO_1,false);
+	gpio_set_level(GPIO_OUTPUT_IO_1,true);
+	while(true){
+		read_status();
+		if(STATUS_NRF.TX_DS>0){
+			gpio_set_level(GPIO_OUTPUT_IO_1,false);
+			STATUS_NRF.TX_DS=0x1;
+			write_status();
+			flush_buffer(0);
+			return 1;
+			break;		
+				}
+		else if(STATUS_NRF.MAX_RT>0){
+			gpio_set_level(GPIO_OUTPUT_IO_1,false);
+			STATUS_NRF.MAX_RT=0x01;
+			write_status();
+			flush_buffer(0);
+			return 0;
+			break;
+				}
+		}
+	}
 
 static void nrf(){
-	uint16_t cmd;
-	uint8_t  cmd_len ;
-	uint32_t addr ;
-	uint8_t  addr_len;
-	uint32_t data ; 
-	uint8_t data_len ;
-
+	
+	uint32_t data;
+	
 	gpio_set_level(GPIO_OUTPUT_IO_1,false);
 	setup_spi();
-	setup_nrf(0);//1 for rx and 0 for tx
+	setup_nrf(0);//1 for rx and 0 for tx 
 
-	//send tx payload 
-
-	 cmd = cmd_W_TX_PAYLOAD;
-	 cmd_len =8;
-	 addr = 0x00;
-	 addr_len = 0;
 	 data = 0x12345678; 
-	 data_len =32;
-	 nrf_write(&cmd , cmd_len, &addr, addr_len, &data, data_len);
+	// data_len =32;
 	
-	// nop to check status
-	 cmd =cmd_read;
-	 cmd_len =3;
-	 addr = addr_status;
-	 addr_len = 5;
-	 data = 0x00; 
-	 data_len =8;
-
-	nrf_read(&cmd , cmd_len, &addr, addr_len, &data, data_len);
-	vTaskDelay(1);
-
-	
-	//en mode
-	gpio_set_level(GPIO_OUTPUT_IO_1,true);
-	vTaskDelay(0.8);
-	gpio_set_level(GPIO_OUTPUT_IO_1,false);
-
-	//FIFO_STATUS
-	 cmd =cmd_read;
-	 cmd_len =3;
-	 addr = 0x17<<(32-5);
-	 addr_len = 5;
-	 data = 0x00; 
-	 data_len =8;
-
-	nrf_read(&cmd , cmd_len, &addr, addr_len, &data, data_len);
-	
-	//STATUS
-	 cmd =cmd_read;
-	 cmd_len =3;
-	 addr = 0x07<<(32-5);
-	 addr_len = 5;
-	 data = 0x00; 
-	 data_len =8;
-
-	nrf_read(&cmd , cmd_len, &addr, addr_len, &data, data_len);
-
 	while (1) 
 		{
-		vTaskDelay(1000/ portTICK_RATE_MS);
-		nrf_read(&cmd , cmd_len, &addr, 5, &data, 8);
-		printf("status is 0x%02x\n\r",data);
-		//check rx payload
-		//nrf_read(cmd_R_RX_PAYLOAD , 8, addr, 0, data, 32);
-		//check tx 
-		nrf_read(&cmd_read , 3, &addr08, 5, &data, 8);
-		printf("data is 0x%02x\n\r",data);		
+		for(uint32_t i=0 ;i<0xffffffff;i++){
+		send_data(&i);// for receiving receive_data(uint32_t *data)
+			if(i>0xffffff){i=0;}		
+		}
+		
 		}
 		
 } 
