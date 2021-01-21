@@ -171,6 +171,8 @@ void setup_nrf(int mode){//mode =1 for prx and 0 for ptx  now only can transmit 
 	}
 
 }
+
+
  void flush_buffer(uint8_t buf){//if buff ==1 flush receiver buffer else if "0" flush transmitter buffer
 	uint16_t cmd;
 	uint8_t  cmd_len;
@@ -211,6 +213,8 @@ void read_status(){
 
 
 }
+
+
  void write_status(){
 	uint16_t cmd =cmd_write;
 	uint8_t cmd_len =3;
@@ -245,6 +249,8 @@ bool receive_data(uint32_t *data){
 		}
 	return 0;
 	}
+
+
 bool send_data(uint32_t *data){
 	uint16_t cmd = cmd_W_TX_PAYLOAD;
 	uint8_t cmd_len =8;
