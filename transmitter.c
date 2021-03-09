@@ -169,7 +169,6 @@ void setup_nrf(int mode){//mode =1 for prx and 0 for ptx  now only can transmit 
 
 	nrf_write(&cmd , cmd_len, &addr, addr_len, &data, data_len);
 	}
-
 }
 
 
